@@ -36,6 +36,8 @@ slang = { git = "https://github.com/FloatyMonkey/slang-rs.git" }
 
 Set the `SLANG_DIR` environment variable to the path of your Slang installation. Download the latest release from their [releases page](https://github.com/shader-slang/slang/releases). Copy `slang.dll` to your executable's directory.
 
+Alternatively, to build libslang from source, enable the `from-source` feature.
+
 To compile to DXIL bytecode you need the Microsoft DirectXShaderCompiler. Download the latest release from their [releases page](https://github.com/microsoft/DirectXShaderCompiler/releases). Copy `dxil.dll` and `dxcompiler.dll` to your executable's directory.
 
 ## Credits

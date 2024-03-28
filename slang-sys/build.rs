@@ -1,119 +1,132 @@
 extern crate bindgen;
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-fn main() {
-	let slang_dir = env::var("SLANG_DIR")
-		.map(PathBuf::from)
-		.expect("Environment variable `SLANG_DIR` should be set to the directory of a Slang installation. \
-		This directory should contain `slang.h` and a `bin` subdirectory.");
+use anyhow::{bail, Context};
 
-	let out_dir = env::var("OUT_DIR")
-		.map(PathBuf::from)
-		.expect("Couldn't determine output directory.");
+fn main() -> anyhow::Result<()> {
+    let out_dir = env::var("OUT_DIR")
+        .map(PathBuf::from)
+        .context("Couldn't determine output directory.")?;
 
-	link_libraries(&slang_dir);
+    let slang_dir = env::var("SLANG_DIR").map(PathBuf::from);
 
-	bindgen::builder()
-		.header(slang_dir.join("slang.h").to_str().unwrap())
-		.clang_arg("-v")
-		.clang_arg("-xc++")
-		.clang_arg("-std=c++14")
-		.allowlist_function("slang_.*")
-		.allowlist_type("slang.*")
-		.allowlist_var("SLANG_.*")
-		.with_codegen_config(
-			  bindgen::CodegenConfig::FUNCTIONS
-			| bindgen::CodegenConfig::TYPES
-			| bindgen::CodegenConfig::VARS,
-		)
-		.parse_callbacks(Box::new(ParseCallback {}))
-		.default_enum_style(bindgen::EnumVariation::Rust {
-			non_exhaustive: true,
-		})
-		.vtable_generation(true)
-		.layout_tests(false)
-		.derive_copy(true)
-		.generate()
-		.expect("Couldn't generate bindings.")
-		.write_to_file(out_dir.join("bindings.rs"))
-		.expect("Couldn't write bindings.");
+    let (slang_h, slang_lib) = if let Ok(slang_dir) = slang_dir {
+        let slang_h = slang_dir.join("include").join("slang.h");
+        let slang_lib = locate_bin_dir(&slang_dir)?;
+        (slang_h, slang_lib)
+    } else {
+        #[cfg(feature = "from-source")]
+        {
+            let dst = build_from_source();
+            (dst.join("include").join("slang.h"), dst.join("lib"))
+        }
+
+        #[cfg(not(feature = "from-source"))]
+        bail!(
+            "Environment variable `SLANG_DIR` should be set to the directory of a Slang installation. \
+            This directory should contain `slang.h` and a `bin` subdirectory.");
+    };
+
+    println!("cargo:rustc-link-search=native={}", slang_lib.display());
+    println!("cargo:rustc-link-lib=dylib=slang");
+
+    bindgen::builder()
+        .header(slang_h.to_str().unwrap())
+        .clang_arg("-v")
+        .clang_arg("-xc++")
+        .clang_arg("-std=c++14")
+        .allowlist_function("slang_.*")
+        .allowlist_type("slang.*")
+        .allowlist_var("SLANG_.*")
+        .with_codegen_config(
+            bindgen::CodegenConfig::FUNCTIONS
+                | bindgen::CodegenConfig::TYPES
+                | bindgen::CodegenConfig::VARS,
+        )
+        .parse_callbacks(Box::new(ParseCallback {}))
+        .default_enum_style(bindgen::EnumVariation::Rust {
+            non_exhaustive: true,
+        })
+        .vtable_generation(true)
+        .layout_tests(false)
+        .derive_copy(true)
+        .generate()
+        .context("Couldn't generate bindings.")?
+        .write_to_file(out_dir.join("bindings.rs"))
+        .context("Couldn't write bindings.")?;
+
+    Ok(())
 }
 
-fn link_libraries(slang_dir: &Path) {
-	let target_os = env::var("CARGO_CFG_TARGET_OS")
-		.expect("Couldn't determine target OS.");
+fn locate_bin_dir(slang_dir: &PathBuf) -> anyhow::Result<PathBuf> {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Couldn't determine target OS.");
 
-	let target_arch = env::var("CARGO_CFG_TARGET_ARCH")
-		.expect("Couldn't determine target architecture.");
+    let target_arch =
+        env::var("CARGO_CFG_TARGET_ARCH").expect("Couldn't determine target architecture.");
 
-	let target = match(&*target_os, &*target_arch) {
-		("windows", "x86")     => "windows-x86",
-		("windows", "x86_64")  => "windows-x64",
-		("windows", "aarch64") => "windows-aarch64",
-		("linux",   "x86_64")  => "linux-x64",
-		("linux",   "aarch64") => "linux-aarch64",
-		("macos",   "x86_64")  => "macosx-x64",
+    let target_dir = slang_dir
+        .join("bin")
+        .join(format!("{target_os}-{target_arch}"));
+    if !target_dir.exists() {
+        bail!(
+            "Couldn't find slang libraries in directory: {}",
+            target_dir.display()
+        );
+    }
 
-		(os, arch) => panic!("Unsupported OS or architecture: {os} {arch}")
-	};
+    Ok(target_dir.join("release"))
+}
 
-	let bin_dir = slang_dir.join(format!("bin/{target}/release"));
+#[cfg(feature = "from-source")]
+fn build_from_source() -> PathBuf {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let source_path = manifest_dir.join("slang");
 
-	if !bin_dir.is_dir() {
-		panic!("
-			Could not find the target-specific `bin` subdirectory (bin/{target}/release) in the Slang installation directory. \
-			The Slang installation may not match the target this crate is being compiled for.
-		")
-	}
-
-	println!("cargo:rustc-link-search=native={}", bin_dir.display());
-	println!("cargo:rustc-link-lib=dylib=slang");
+    std::fs::canonicalize(cmake::build(source_path)).unwrap()
 }
 
 #[derive(Debug)]
 struct ParseCallback {}
 
 impl bindgen::callbacks::ParseCallbacks for ParseCallback {
-	fn enum_variant_name(
-		&self,
-		enum_name: Option<&str>,
-		original_variant_name: &str,
-		_variant_value: bindgen::callbacks::EnumVariantValue,
-	) -> Option<String> {
-		let enum_name = enum_name?;
+    fn enum_variant_name(
+        &self,
+        enum_name: Option<&str>,
+        original_variant_name: &str,
+        _variant_value: bindgen::callbacks::EnumVariantValue,
+    ) -> Option<String> {
+        let enum_name = enum_name?;
 
-		// Map enum names to the part of their variant names that needs to be trimmed.
-		// When an enum name is not in this map the code below will try to trim the enum name itself.
-		let mut map = std::collections::HashMap::new();
-		map.insert("SlangMatrixLayoutMode", "SlangMatrixLayout");
-		map.insert("SlangCompileTarget", "Slang");
+        // Map enum names to the part of their variant names that needs to be trimmed.
+        // When an enum name is not in this map the code below will try to trim the enum name itself.
+        let mut map = std::collections::HashMap::new();
+        map.insert("SlangMatrixLayoutMode", "SlangMatrixLayout");
+        map.insert("SlangCompileTarget", "Slang");
 
-		let trim = map.get(enum_name).unwrap_or(&enum_name);
-		let new_variant_name = pascal_case_from_snake_case(original_variant_name);
-		let new_variant_name = new_variant_name.trim_start_matches(trim);
-		Some(new_variant_name.to_string())
-	}
+        let trim = map.get(enum_name).unwrap_or(&enum_name);
+        let new_variant_name = pascal_case_from_snake_case(original_variant_name);
+        let new_variant_name = new_variant_name.trim_start_matches(trim);
+        Some(new_variant_name.to_string())
+    }
 }
 
 /// Converts `snake_case` or `SNAKE_CASE` to `PascalCase`.
 fn pascal_case_from_snake_case(snake_case: &str) -> String {
-	let mut result = String::new();
-	let mut capitalize_next = true;
+    let mut result = String::new();
+    let mut capitalize_next = true;
 
-	for c in snake_case.chars() {
-		if c == '_' {
-			capitalize_next = true;
-		} else {
-			if capitalize_next {
-				result.push(c.to_ascii_uppercase());
-				capitalize_next = false;
-			} else {
-				result.push(c.to_ascii_lowercase());
-			}
-		}
-	}
+    for c in snake_case.chars() {
+        if c == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c.to_ascii_lowercase());
+        }
+    }
 
-	result
+    result
 }

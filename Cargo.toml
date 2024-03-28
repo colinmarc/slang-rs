@@ -9,6 +9,7 @@ publish = false
 slang-sys = { path = "slang-sys" }
 
 [workspace]
-members = [
-	"slang-sys"
-]
+members = ["slang-sys"]
+
+[features]
+from-source = ["slang-sys/from-source"]
