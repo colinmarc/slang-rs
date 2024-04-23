@@ -1,7 +1,7 @@
 extern crate bindgen;
 
-use std::env;
 use std::path::PathBuf;
+use std::{env, path::Path};
 
 use anyhow::{bail, Context};
 
@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     let slang_dir = env::var("SLANG_DIR").map(PathBuf::from);
 
     let (slang_h, slang_lib) = if let Ok(slang_dir) = slang_dir {
-        let slang_h = slang_dir.join("include").join("slang.h");
+        let slang_h = slang_dir.join("slang.h");
         let slang_lib = locate_bin_dir(&slang_dir)?;
         (slang_h, slang_lib)
     } else {
@@ -60,15 +60,17 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn locate_bin_dir(slang_dir: &PathBuf) -> anyhow::Result<PathBuf> {
-    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Couldn't determine target OS.");
+fn locate_bin_dir(slang_dir: &Path) -> anyhow::Result<PathBuf> {
+    let entries = std::fs::read_dir(slang_dir.join("bin"))?.collect::<Vec<_>>();
+    if entries.len() != 1 {
+        bail!(
+            "Couldn't determine slang binary path in directory: {}",
+            slang_dir.display()
+        );
+    }
 
-    let target_arch =
-        env::var("CARGO_CFG_TARGET_ARCH").expect("Couldn't determine target architecture.");
-
-    let target_dir = slang_dir
-        .join("bin")
-        .join(format!("{target_os}-{target_arch}"));
+    let release_dir = entries.into_iter().next().unwrap()?;
+    let target_dir = slang_dir.join("bin").join(release_dir.file_name());
     if !target_dir.exists() {
         bail!(
             "Couldn't find slang libraries in directory: {}",
