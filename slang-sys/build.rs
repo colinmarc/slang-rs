@@ -1,8 +1,9 @@
 extern crate bindgen;
 
+use std::env;
 use std::path::PathBuf;
-use std::{env, path::Path};
 
+#[allow(unused_imports)]
 use anyhow::{bail, Context};
 
 fn main() -> anyhow::Result<()> {
@@ -13,9 +14,10 @@ fn main() -> anyhow::Result<()> {
     let slang_dir = env::var("SLANG_DIR").map(PathBuf::from);
 
     let (slang_h, slang_lib) = if let Ok(slang_dir) = slang_dir {
-        let slang_h = slang_dir.join("slang.h");
-        let slang_lib = locate_bin_dir(&slang_dir)?;
-        (slang_h, slang_lib)
+        (
+            slang_dir.join("include").join("slang.h"),
+            slang_dir.join("lib"),
+        )
     } else {
         #[cfg(feature = "from-source")]
         {
@@ -25,8 +27,7 @@ fn main() -> anyhow::Result<()> {
 
         #[cfg(not(feature = "from-source"))]
         bail!(
-            "Environment variable `SLANG_DIR` should be set to the directory of a Slang installation. \
-            This directory should contain `slang.h` and a `bin` subdirectory.");
+            "Environment variable `SLANG_DIR` should be set to the directory of a Slang installation.");
     };
 
     println!("cargo:rustc-link-search=native={}", slang_lib.display());
@@ -58,27 +59,6 @@ fn main() -> anyhow::Result<()> {
         .context("Couldn't write bindings.")?;
 
     Ok(())
-}
-
-fn locate_bin_dir(slang_dir: &Path) -> anyhow::Result<PathBuf> {
-    let entries = std::fs::read_dir(slang_dir.join("bin"))?.collect::<Vec<_>>();
-    if entries.len() != 1 {
-        bail!(
-            "Couldn't determine slang binary path in directory: {}",
-            slang_dir.display()
-        );
-    }
-
-    let release_dir = entries.into_iter().next().unwrap()?;
-    let target_dir = slang_dir.join("bin").join(release_dir.file_name());
-    if !target_dir.exists() {
-        bail!(
-            "Couldn't find slang libraries in directory: {}",
-            target_dir.display()
-        );
-    }
-
-    Ok(target_dir.join("release"))
 }
 
 #[cfg(feature = "from-source")]
