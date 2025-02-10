@@ -63,10 +63,19 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(feature = "from-source")]
 fn build_from_source() -> PathBuf {
+    const SLANG_VERSION: &str = "v2025.5";
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let source_path = manifest_dir.join("slang");
 
-    std::fs::canonicalize(cmake::build(source_path)).unwrap()
+    let mut cfg = cmake::Config::new(source_path);
+    cfg.define("SLANG_VERSION_FULL", SLANG_VERSION);
+    cfg.define(
+        "SLANG_VERSION_NUMERIC",
+        SLANG_VERSION.strip_prefix('v').unwrap(),
+    );
+
+    std::fs::canonicalize(cfg.build()).unwrap()
 }
 
 #[derive(Debug)]
